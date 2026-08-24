@@ -66,6 +66,7 @@ module RvvFrontEnd#(parameter N = 4,
 );
   localparam COUNTBITS = $clog2(N + 1);
   typedef logic [COUNTBITS-1:0] count_t;
+  typedef logic [CAPACITYBITS-1:0] capacity_t;
 
   // vtype architectural state
   logic vill;
@@ -96,21 +97,21 @@ module RvvFrontEnd#(parameter N = 4,
   assign config_state_valid = config_state_reduction;
   assign config_state = config_state_q;
 
-  logic [CAPACITYBITS-1:0] queue_capacity;
+  capacity_t queue_capacity;
   assign queue_capacity_o = queue_capacity;
   always_comb begin
-    queue_capacity = queue_capacity_i - valid_inst_count_q;
+    queue_capacity = queue_capacity_i - capacity_t'(valid_inst_count_q);
   end
 
   logic inst_accepted [N-1:0];
   count_t valid_inst_count_d;
   always_comb begin
     for (int i = 0; i < N; i++) begin
-      inst_accepted[i] = (valid_in_psum[i] < queue_capacity) && inst_valid_i[i];
+      inst_accepted[i] = (capacity_t'(valid_in_psum[i]) < queue_capacity) && inst_valid_i[i];
       inst_ready_o[i] = inst_accepted[i];
     end
-    valid_inst_count_d = (valid_in_psum[N] < queue_capacity) ?
-        valid_in_psum[N] : queue_capacity;
+    valid_inst_count_d = (capacity_t'(valid_in_psum[N]) < queue_capacity) ?
+        valid_in_psum[N] : count_t'(queue_capacity);
   end
 
   always_ff @(posedge clk or negedge rstn) begin
@@ -156,6 +157,9 @@ module RvvFrontEnd#(parameter N = 4,
 `endif  // ZVE32F_ON
     for (int i = 0; i < N; i++) begin
       inst_config_state[i+1] = inst_config_state[i];
+      if (valid_inst_q[i] && ((inst_q[i].opcode != RVV) || (inst_q[i].bits[7:5] != 3'b111))) begin
+          inst_config_state[i+1].vstart = 0;
+      end
       avl[i] = 0;
       vlmax[i] = 0;
       is_setvl[i] = 0;
@@ -317,10 +321,10 @@ module RvvFrontEnd#(parameter N = 4,
           inst_config_state[i+1].ma = 0;
         end else if (avl[i] > vlmax[i]) begin
           // One possible valid impl according to 6.3 of RVV spec.
-          inst_config_state[i+1].vl = vlmax[i];
+          inst_config_state[i+1].vl = vlmax[i][`VL_WIDTH-1:0];
           inst_config_state[i+1].lmul = inst_config_state[i+1].lmul_orig;
         end else begin
-          inst_config_state[i+1].vl = avl[i];
+          inst_config_state[i+1].vl = avl[i][`VL_WIDTH-1:0];
           inst_config_state[i+1].lmul = inst_config_state[i+1].lmul_orig;
         end
 
@@ -457,7 +461,7 @@ module RvvFrontEnd#(parameter N = 4,
 `endif
       unaligned_cmd_data[i].opcode = inst_q[i].opcode;
       unaligned_cmd_data[i].bits = inst_q[i].bits;
-      unaligned_cmd_data[i].arch_state = inst_config_state[i+1];
+      unaligned_cmd_data[i].arch_state = inst_config_state[i];
       // TODO: Handle rs propagation for loads/stores
       // funct3 == inst[14:12] == bits[7:5]; bits[7] == funct3[2] indicates
       // scalar rs1 is used (OPIVX, OPFVF, OPMVX, OPCFG). For OPFVF the scalar
@@ -480,7 +484,7 @@ module RvvFrontEnd#(parameter N = 4,
 `ifdef ZVT_ON
           mset_writes_rd[i] ? mset_rd_data[i] :
 `endif
-          {{(`XLEN-`VL_WIDTH){1'b0}}, inst_config_state[i+1].vl};
+          {{(`XLEN-(`VL_WIDTH)){1'b0}}, inst_config_state[i+1].vl};
     end
   end
 

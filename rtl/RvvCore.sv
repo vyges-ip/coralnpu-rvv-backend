@@ -99,7 +99,11 @@ module RvvCore #(parameter N = 4,
 
   // VXSAT update from backend (fixes C3 bug: previously dead-end wires)
   output logic                            wr_vxsat_valid_o,
-  output logic    [`VCSR_VXSAT_WIDTH-1:0] wr_vxsat_o
+  output logic    [`VCSR_VXSAT_WIDTH-1:0] wr_vxsat_o,
+
+  // Floating point fflags update from backend
+  output logic                            wr_fflags_valid_o,
+  output logic    [4:0]                   wr_fflags_o
 );
   logic [N-1:0] frontend_cmd_valid;
   RVVCmd [N-1:0] frontend_cmd_data;
@@ -167,6 +171,8 @@ module RvvCore #(parameter N = 4,
             uop_lsu_valid_lsu2rvv[i] && !uop_lsu_last_lsu2rvv[i]);
         uop_lsu_lsu2rvv[i].vregfile_write_addr = uop_lsu_addr_lsu2rvv[i];
         uop_lsu_lsu2rvv[i].vregfile_write_data = uop_lsu_wdata_lsu2rvv[i];
+        // TODO: Handle ff_tail_index properly for fault-only-first loads
+        uop_lsu_lsu2rvv[i].ff_tail_index = '0;
         uop_lsu_lsu2rvv[i].lsu_vstore_last = (
             uop_lsu_valid_lsu2rvv[i] && uop_lsu_last_lsu2rvv[i]);
         `ifdef TB_SUPPORT
@@ -194,6 +200,8 @@ module RvvCore #(parameter N = 4,
   end
 
   // Floating point regfile write-back
+  // TODO(derekjchow): Properly arbitrate write-back tie-offs by extending
+  // interface. For time being, only accept from slot 0.
   logic [`NUM_RT_UOP-1:0]                           rvv2rvs_frd_valid;
 `ifdef TB_SUPPORT
   logic [`NUM_RT_UOP-1:0][`PC_WIDTH-1:0]            rvv2rvs_frd_pc;
@@ -203,7 +211,9 @@ module RvvCore #(parameter N = 4,
   logic [`NUM_RT_UOP-1:0]                           rvv2rvs_frd_ready;
   always_comb begin
     rvv2rvs_frd_ready[0] = async_frd_ready;
-    rvv2rvs_frd_ready[1] = 0;
+    for (int i = 1; i < `NUM_RT_UOP; i++) begin
+      rvv2rvs_frd_ready[i] = 0;
+    end
   end
   assign async_frd_valid = rvv2rvs_frd_valid[0];
   assign async_frd_addr = rvv2rvs_frd_addr[0];
@@ -314,5 +324,14 @@ module RvvCore #(parameter N = 4,
   // Connect vxsat signals to outputs (fixes C3 bug)
   assign wr_vxsat_valid_o = wr_vxsat_valid;
   assign wr_vxsat_o = wr_vxsat;
+
+  // Connect fflags signals to outputs
+`ifdef ZVE32F_ON
+  assign wr_fflags_valid_o = rt2fcsr_write_valid;
+  assign wr_fflags_o = rt2fcsr_write_data;
+`else
+  assign wr_fflags_valid_o = 1'b0;
+  assign wr_fflags_o = 5'b0;
+`endif
 
 endmodule
