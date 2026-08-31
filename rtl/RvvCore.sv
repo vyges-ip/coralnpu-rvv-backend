@@ -27,6 +27,7 @@ module RvvCore #(parameter N = 4,
   input logic [1:0] vxrm,
   input logic vxsat,
   input logic [2:0] frm,
+  input logic flush,
 
   // Instruction input.
   input logic [N-1:0] inst_valid,
@@ -90,8 +91,13 @@ module RvvCore #(parameter N = 4,
   output logic [$clog2(2*N + 1)-1:0] queue_capacity,
 
   // Writeback from reorder buffer
+`ifdef TB_SUPPORT
+  output ROB2RT_t [`NUM_RT_UOP+`NUM_DE_INST-1:0] rd_rob2rt_o,
+  output logic    [`NUM_RT_UOP+`NUM_DE_INST-1:0] rd_valid_rob2rt_o,
+`else
   output ROB2RT_t [`NUM_RT_UOP-1:0] rd_rob2rt_o,
   output logic    [`NUM_RT_UOP-1:0] rd_valid_rob2rt_o,
+`endif
 
   // Trap output
   output logic trap_valid_o,
@@ -108,13 +114,14 @@ module RvvCore #(parameter N = 4,
   logic [N-1:0] frontend_cmd_valid;
   RVVCmd [N-1:0] frontend_cmd_data;
   logic [$clog2(2*N + 1)-1:0] queue_capacity_internal;
-  RvvFrontEnd#(.N(N)) frontend(
+  RvvFrontEnd#(.N(N), .RegDataT(RegDataT), .RegAddrT(RegAddrT)) frontend(
       .clk(clk),
       .rstn(rstn),
       .vstart_i(vstart),
       .vxrm_i(vxrm),
       .vxsat_i(vxsat),
       .frm_i(frm),
+      .flush_i(flush),
       .inst_valid_i(inst_valid),
       .inst_data_i(inst_data),
       .inst_ready_o(inst_ready),
@@ -206,6 +213,7 @@ module RvvCore #(parameter N = 4,
 `ifdef TB_SUPPORT
   logic [`NUM_RT_UOP-1:0][`PC_WIDTH-1:0]            rvv2rvs_frd_pc;
 `endif
+  logic [`NUM_RT_UOP-1:0][`ROB_TAG_WIDTH-1:0]       rvv2rvs_frd_rob_tag;
   logic [`NUM_RT_UOP-1:0][`REGFILE_INDEX_WIDTH-1:0] rvv2rvs_frd_addr;
   logic [`NUM_RT_UOP-1:0][`XLEN-1:0]                rvv2rvs_frd_data;
   logic [`NUM_RT_UOP-1:0]                           rvv2rvs_frd_ready;
@@ -239,21 +247,19 @@ module RvvCore #(parameter N = 4,
     fcsr2rt_write_ready = 1;
   end
 
-  // Trap handling tie-off
+  // Trap handling
   logic  trap_valid_rvs2rvv;
   logic  trap_ready_rvv2rvs;
-  always_comb begin
-    trap_valid_rvs2rvv = 0;
-  end
+  assign trap_valid_rvs2rvv = flush;
 
   // Tie-off VME LSU interfaces
   // TODO: Support these
 `ifdef ZVT_ON
-  logic                 uop_vme2lsu_vld_dummy;
-  UOP_VME2LSU_t         uop_vme2lsu_dummy;
-  logic                 uop_lsu2vme_rdy_dummy;
-  logic                 vme_lsuflush_vld_dummy;
-  logic                 vme_lsuflush_rdy_dummy;
+  // logic                 uop_vme2lsu_vld_dummy;
+  // UOP_VME2LSU_t         uop_vme2lsu_dummy;
+  // logic                 uop_lsu2vme_rdy_dummy;
+  // logic                 vme_lsuflush_vld_dummy;
+  // logic                 vme_lsuflush_rdy_dummy;
 `endif
 
   logic   [`ISSUE_LANE-1:0] insts_ready_cq2rvs;
@@ -284,6 +290,7 @@ module RvvCore #(parameter N = 4,
 `ifdef TB_SUPPORT
       .async_frd_pc(rvv2rvs_frd_pc),
 `endif
+      .async_frd_rob_tag(rvv2rvs_frd_rob_tag),
       .async_frd_addr(rvv2rvs_frd_addr),
       .async_frd_data(rvv2rvs_frd_data),
       .async_frd_ready(rvv2rvs_frd_ready),
@@ -307,17 +314,17 @@ module RvvCore #(parameter N = 4,
       .rvv_idle(rvv_backend_idle),
       .rd_rob2rt_o(rd_rob2rt_o)
 `ifdef ZVT_ON
-      ,.uop_vme2lsu_vld(uop_vme2lsu_vld_dummy),
-      .uop_vme2lsu(uop_vme2lsu_dummy),
+      ,.uop_vme2lsu_vld(),
+      .uop_vme2lsu(),
       .uop_vme2lsu_rdy(1'b0),
       .uop_lsu2vme_vld(1'b0),
       .uop_lsu2vme('0),
-      .uop_lsu2vme_rdy(uop_lsu2vme_rdy_dummy),
-      .vme_lsuflush_vld(vme_lsuflush_vld_dummy),
-      .vme_lsuflush_rdy(vme_lsuflush_rdy_dummy),
+      .uop_lsu2vme_rdy(),
+      .vme_lsuflush_vld(1'b0),
+      .vme_lsuflush_rdy(),
       .vmeRtVld(),
       .vmeRt(),
-      .vmeRtRdy(1'b0)
+      .vmeRtRdy(1'b1)
 `endif
   );
 

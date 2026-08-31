@@ -3425,7 +3425,7 @@ module rvv_backend_decode_unit_lsu
 
   //check common requirements for all instructions
   assign check_common = check_vd_align&check_vs2_align&check_vd_in_range&check_sew&check_lmul
-                        &check_evl_not_0&check_vstart_sle_evl;
+                        &check_evl_not_0;
 
   // check whether vd is aligned to emul_vd
   always_comb begin
@@ -3483,7 +3483,7 @@ module rvv_backend_decode_unit_lsu
       default: check_vd_cmp = 'b0;
     endcase
   end
-  assign check_vd_in_range = (emul_vd_nf!=EMUL_NONE) ? inst_vd <= check_vd_cmp : 'b0;
+  assign check_vd_in_range = (inst_funct6[2:0] == TILE_LDST) ? 1'b1 : ((emul_vd_nf!=EMUL_NONE) ? inst_vd <= check_vd_cmp : 'b0);
 
   // check the validation of EEW
   assign check_sew = (eew_max != EEW_NONE);

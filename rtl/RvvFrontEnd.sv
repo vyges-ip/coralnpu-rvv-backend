@@ -23,7 +23,9 @@
 // queue.
 module RvvFrontEnd#(parameter N = 4,
                     parameter CAPACITYBITS=$clog2(2*N + 1),
-                    parameter REDUCE_LMUL = 1)
+                    parameter REDUCE_LMUL = 1,
+                    type RegDataT = logic [31:0],
+                    type RegAddrT = logic [4:0])
 (
   input clk,
   input rstn,
@@ -32,6 +34,7 @@ module RvvFrontEnd#(parameter N = 4,
   input logic [`VCSR_VXRM_WIDTH-1:0]  vxrm_i,
   input logic [`VCSR_VXSAT_WIDTH-1:0] vxsat_i,
   input logic [2:0]                   frm_i,
+  input logic                         flush_i,
 
   // Instruction input.
   input logic [N-1:0] inst_valid_i,
@@ -40,15 +43,15 @@ module RvvFrontEnd#(parameter N = 4,
 
   // Register file input
   input logic [(2*N)-1:0] reg_read_valid_i,
-  input logic [(2*N)-1:0][31:0] reg_read_data_i,
+  input RegDataT [(2*N)-1:0] reg_read_data_i,
 
   // Floating point register file input (scalar rs1 for OPFVF instructions).
-  input logic [N-1:0][31:0] freg_read_data_i,
+  input RegDataT [N-1:0] freg_read_data_i,
 
   // Scalar Regfile writeback for configuration functions.
   output logic [N-1:0] reg_write_valid_o,
-  output logic [N-1:0][4:0] reg_write_addr_o,
-  output logic [N-1:0][31:0] reg_write_data_o,
+  output RegAddrT [N-1:0] reg_write_addr_o,
+  output RegDataT [N-1:0] reg_write_data_o,
 
   // Command output.
   output logic [N-1:0] cmd_valid_o,
@@ -118,13 +121,18 @@ module RvvFrontEnd#(parameter N = 4,
     if (!rstn) begin
       for (int i = 0; i < N; i++) begin
         valid_inst_q[i] <= 0;
-        valid_inst_count_q <= 0;
-      end;
+      end
+      valid_inst_count_q <= 0;
+    end else if (flush_i) begin
+      for (int i = 0; i < N; i++) begin
+        valid_inst_q[i] <= 0;
+      end
+      valid_inst_count_q <= 0;
     end else begin
       for (int i = 0; i < N; i++) begin
         valid_inst_q[i] <= inst_accepted[i];
-        valid_inst_count_q <= valid_inst_count_d;
       end
+      valid_inst_count_q <= valid_inst_count_d;
     end
   end
 
@@ -136,8 +144,8 @@ module RvvFrontEnd#(parameter N = 4,
 
   // Update configuration architectural state
   RVVConfigState inst_config_state [N:0];
-  logic [31:0] avl [N-1:0];
-  logic [31:0] vlmax [N-1:0];
+  RegDataT avl [N-1:0];
+  RegDataT vlmax [N-1:0];
   logic is_setvl [N-1:0];
   logic [`VL_WIDTH-1:0] vl_minus_one [N-1:0];
 `ifdef ZVT_ON
@@ -157,9 +165,6 @@ module RvvFrontEnd#(parameter N = 4,
 `endif  // ZVE32F_ON
     for (int i = 0; i < N; i++) begin
       inst_config_state[i+1] = inst_config_state[i];
-      if (valid_inst_q[i] && ((inst_q[i].opcode != RVV) || (inst_q[i].bits[7:5] != 3'b111))) begin
-          inst_config_state[i+1].vstart = 0;
-      end
       avl[i] = 0;
       vlmax[i] = 0;
       is_setvl[i] = 0;
@@ -273,6 +278,7 @@ module RvvFrontEnd#(parameter N = 4,
       end
 
       if (is_setvl[i]) begin
+        inst_config_state[i+1].vstart = 0;
         // Compute legality of vtype.
         unique case (inst_config_state[i+1].sew)
           SEW8:
@@ -456,12 +462,13 @@ module RvvFrontEnd#(parameter N = 4,
           !inst_config_state[i+1].vill;
 
       // Combine instruction + arch state into command
+      unaligned_cmd_data[i].rob_tag = inst_q[i].rob_tag;
 `ifdef TB_SUPPORT
       unaligned_cmd_data[i].inst_pc = inst_q[i].pc;
 `endif
       unaligned_cmd_data[i].opcode = inst_q[i].opcode;
       unaligned_cmd_data[i].bits = inst_q[i].bits;
-      unaligned_cmd_data[i].arch_state = inst_config_state[i];
+      unaligned_cmd_data[i].arch_state = inst_config_state[i+1];
       // TODO: Handle rs propagation for loads/stores
       // funct3 == inst[14:12] == bits[7:5]; bits[7] == funct3[2] indicates
       // scalar rs1 is used (OPIVX, OPFVF, OPMVX, OPCFG). For OPFVF the scalar
@@ -557,15 +564,6 @@ module RvvFrontEnd#(parameter N = 4,
           );
       requires_rs2_read[i] =
           lsu_requires_rs2_read[i] || non_lsu_requires_rs2_read[i];
-    end
-  end
-
-  always @(posedge clk) begin
-    for (int i = 0; i < N; i++) begin
-      assert(!valid_inst_q[i] || !requires_rs1_read[i] ||
-              reg_read_valid_i[2*i]);
-      assert(!valid_inst_q[i] || !requires_rs2_read[i] ||
-              reg_read_valid_i[(2*i) + 1]);
     end
   end
 `endif  // not def SYNTHESIS

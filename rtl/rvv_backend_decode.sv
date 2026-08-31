@@ -11,11 +11,9 @@ module rvv_backend_decode
   inst_valid,
   inst,
   lcmd_valid,
-  lcmd
-`ifdef TB_SUPPORT
-  ,de2rvvi_valid,
-  de2rvvi_data
-`endif
+  lcmd,
+  de2rt_valid,
+  de2rt_data
 );
 //
 // interface signals
@@ -26,11 +24,9 @@ module rvv_backend_decode
   output  logic     [`NUM_DE_INST-1:0]  lcmd_valid;
   output  LCMD_t    [`NUM_DE_INST-1:0]  lcmd;
 
-`ifdef TB_SUPPORT
   // retire information for reserved instruction
-  output  logic     [`NUM_DE_INST-1:0]  de2rvvi_valid; // always ready to receive.
-  output  ROB2RT_t  [`NUM_DE_INST-1:0]  de2rvvi_data;  
-`endif 
+  output  logic     [`NUM_DE_INST-1:0]  de2rt_valid; // always ready to receive.
+  output  ROB2RT_t  [`NUM_DE_INST-1:0]  de2rt_data;  
 
 //
 // decode
@@ -48,7 +44,6 @@ module rvv_backend_decode
     end
   endgenerate
 
-`ifdef TB_SUPPORT
   // Retire information for reserved/un-decoded instructions:
   // In verification testbenches, generate dummy 0-write retirement records so
   // RVVI tracers stay synchronized for discarded instructions.
@@ -56,24 +51,26 @@ module rvv_backend_decode
   // in the scalar core.
   always_comb begin
     for(int i=0;i<`NUM_DE_INST;i++) begin
-      de2rvvi_valid[i]                  = inst_valid[i] & !lcmd_valid[i];
+      de2rt_valid[i]                  = inst_valid[i] & !lcmd_valid[i];
       
-      de2rvvi_data[i].uop_pc            = inst[i].inst_pc;
-      de2rvvi_data[i].last_uop_valid    = 'b1;
-      de2rvvi_data[i].res_updating_end  = 'b1;
-      de2rvvi_data[i].w_valid           = 'b0;  // update nothing         
-      de2rvvi_data[i].w_index           = 'b0;
-      de2rvvi_data[i].w_data            = 'b0; 
-      de2rvvi_data[i].w_type            = VRF; 
-      de2rvvi_data[i].vd_type           = {`VLENB{NOT_CHANGE}};
-      de2rvvi_data[i].trap_flag         = 'b0;
-      de2rvvi_data[i].vector_csr        = inst[i].arch_state;
-      de2rvvi_data[i].vxsaturate        = 'b0;
+    `ifdef TB_SUPPORT
+      de2rt_data[i].uop_pc            = inst[i].inst_pc;
+    `endif
+      de2rt_data[i].rob_tag           = inst[i].rob_tag;
+      de2rt_data[i].res_updating_end  = 'b0;
+      de2rt_data[i].last_uop_valid    = 'b1;
+      de2rt_data[i].w_valid           = 'b0;  // update nothing         
+      de2rt_data[i].w_index           = 'b0;
+      de2rt_data[i].w_data            = 'b0; 
+      de2rt_data[i].w_type            = VRF; 
+      de2rt_data[i].vd_type           = {`VLENB{NOT_CHANGE}};
+      de2rt_data[i].trap_flag         = 'b0;
+      de2rt_data[i].vector_csr        = inst[i].arch_state;
+      de2rt_data[i].vxsaturate        = 'b0;
     `ifdef ZVE32F_ON
-      de2rvvi_data[i].fpexp             = 'b0;
+      de2rt_data[i].fpexp             = 'b0;
     `endif
     end
   end
-`endif
   
 endmodule
