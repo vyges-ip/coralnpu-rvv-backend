@@ -80,15 +80,6 @@ module RvvFrontEnd#(parameter N = 4,
   count_t valid_inst_count_q;     // The sum of valid_inst_q
   RVVInstruction inst_q [N-1:0];  // The instruction in the slot
 
-  // Backpressure
-  count_t valid_in_psum [N:0];
-  always_comb begin
-    valid_in_psum[0] = 0;
-    for (int i = 0; i < N; i++) begin
-      valid_in_psum[i+1] = valid_in_psum[i] + inst_valid_i[i];
-    end
-  end
-
   // State, for time being lets do not state forwarding for timing
   logic config_state_reduction;
   always_comb begin
@@ -106,15 +97,19 @@ module RvvFrontEnd#(parameter N = 4,
     queue_capacity = queue_capacity_i - capacity_t'(valid_inst_count_q);
   end
 
+  // Ready depends only on registered queue occupancy, never on inst_valid_i,
+  // so the dispatch valid/ready handshake has no combinational cycle.
+  for (genvar gi = 0; gi < N; gi++) begin : g_ready
+    assign inst_ready_o[gi] = (capacity_t'(gi) < queue_capacity);
+  end
   logic inst_accepted [N-1:0];
   count_t valid_inst_count_d;
   always_comb begin
+    valid_inst_count_d = 0;
     for (int i = 0; i < N; i++) begin
-      inst_accepted[i] = (capacity_t'(valid_in_psum[i]) < queue_capacity) && inst_valid_i[i];
-      inst_ready_o[i] = inst_accepted[i];
+      inst_accepted[i] = inst_ready_o[i] && inst_valid_i[i];
+      valid_inst_count_d += count_t'(inst_accepted[i]);
     end
-    valid_inst_count_d = (capacity_t'(valid_in_psum[N]) < queue_capacity) ?
-        valid_in_psum[N] : count_t'(queue_capacity);
   end
 
   always_ff @(posedge clk or negedge rstn) begin
@@ -453,13 +448,26 @@ module RvvFrontEnd#(parameter N = 4,
   RVVCmd [N-1:0] unaligned_cmd_data;
   logic [N-1:0] unaligned_trap_valid;  // Should this instruction trap
   RVVInstruction [N-1:0] unaligned_trap_data;
+  logic [N-1:0] is_whole_reg;
   always_comb begin
     for (int i = 0; i < N; i++) begin
-      unaligned_trap_valid[i] = valid_inst_q[i] && !is_setvl[i] &&
-          inst_config_state[i+1].vill;
+      // Whole-register moves (vmv<nr>r.v: opcode=RVV, funct3=OPIVI, funct6=VSMUL_VMVNRR, vm=1, vs1[4:3]=00)
+      // ignore vtype and execute even when vill is set (RVV 1.0 §16.6).
+      is_whole_reg[i] = (inst_q[i].opcode == RVV) &&
+                        (inst_q[i].bits[7:5] == OPIVI) &&
+                        (inst_q[i].bits[24:19] == VSMUL_VMVNRR) &&
+                        (inst_q[i].bits[18] == 1'b1) &&
+                        (inst_q[i].bits[12:11] == 2'b00);
+
+      // vill is checked here only for vector arithmetic/ALU instructions (opcode == RVV).
+      // Vector loads and stores (and whole-register moves) are excluded: loads/stores that
+      // violate vill are trapped in scalar decode to avoid hanging the scalar LSU.
+      // Configuration instructions (vset*/mset*) do not trap on vill.
+      unaligned_trap_valid[i] = valid_inst_q[i] && (inst_q[i].opcode == RVV) &&
+          !is_setvl[i] && !is_whole_reg[i] && inst_config_state[i+1].vill;
       unaligned_trap_data[i] = inst_q[i];
       unaligned_cmd_valid[i] = valid_inst_q[i] && !is_setvl[i] &&
-          !inst_config_state[i+1].vill;
+          ((inst_q[i].opcode != RVV) || !inst_config_state[i+1].vill || is_whole_reg[i]);
 
       // Combine instruction + arch state into command
       unaligned_cmd_data[i].rob_tag = inst_q[i].rob_tag;
@@ -476,6 +484,9 @@ module RvvFrontEnd#(parameter N = 4,
       unaligned_cmd_data[i].rs1 =
           inst_q[i].bits[7] ?
               ((inst_q[i].bits[7:5] == 3'b101) ? freg_read_data_i[i]  // OPFVF
+`ifdef ZVT_ON
+               : ((inst_q[i].opcode != RVV) && (inst_q[i].bits[21:19] == 3'b100)) ? reg_read_data_i[(2*i) + 1]  // VME tile ld/st (TSS in rs2)
+`endif
                                                : reg_read_data_i[2*i])
             : 0;
 
@@ -514,6 +525,7 @@ module RvvFrontEnd#(parameter N = 4,
     trap_data.pc = '0;
     trap_data.bits = '0;
     trap_data.opcode = RVV;
+    trap_data.rob_tag = '0;
 
     for (int i = 0; i < N; i++) begin
       if (unaligned_trap_valid[i]) begin
@@ -550,9 +562,13 @@ module RvvFrontEnd#(parameter N = 4,
       requires_rs1_read[i] =
           lsu_requires_rs1_read[i] || non_lsu_requires_rs1_read[i];
 
-      // Only strided loads/stores (mop=0b10) read rs2
+      // Only strided loads/stores (mop=0b10) and VME tile loads/stores read rs2
       lsu_requires_rs2_read[i] = (inst_q[i].opcode != RVV) &&
-          (inst_q[i].bits[20:19] == 2'b10);
+          ((inst_q[i].bits[20:19] == 2'b10)
+`ifdef ZVT_ON
+           || ((inst_q[i].bits[21:19] == 3'b100) && (inst_q[i].bits[7:5] == 3'b111))
+`endif
+          );
       // vsetvl is only non LSU instruction that reads rs2
       non_lsu_requires_rs2_read[i] = (inst_q[i].opcode == RVV) &&
           (inst_q[i].bits[7:5] == 3'b111) &&
