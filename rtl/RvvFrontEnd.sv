@@ -221,14 +221,51 @@ module RvvFrontEnd#(parameter N = 4,
         else if (inst_q[i].bits[24:18] == 7'b1000001) begin  // msetmtype
           // mtype <- rs1, vtype <- rs2 (vsetvl semantics), vl <- 0.
           inst_config_state[i+1].mtwiden = reg_read_data_i[2*i][1:0];
-          inst_config_state[i+1].tk     = reg_read_data_i[2*i][6:5];
-          inst_config_state[i+1].tm     = reg_read_data_i[2*i][23:10];
-          inst_config_state[i+1].lmul_orig =
-              RVVLMUL'(reg_read_data_i[(2*i) + 1][2:0]);
           inst_config_state[i+1].sew =
               RVVSEW'(reg_read_data_i[(2*i) + 1][5:3]);
-          inst_config_state[i+1].ta = reg_read_data_i[(2*i) + 1][6];
-          inst_config_state[i+1].ma = reg_read_data_i[(2*i) + 1][7];
+          if (reg_read_data_i[2*i][1:0] != 2'b00) begin
+            // Zvt §15.1.1.4: When mtwiden != 0, vma and vta are set to 1,
+            // and vlmul is derived:
+            // LMUL = min(8/KMAX, 8/TWIDEN, ceil(ETE/EVE)).
+            // For VLEN=128, TE=16:
+            //   SEW8  -> LMUL1 (3'b000)
+            //   SEW16 -> LMUL2 (3'b001)
+            //   SEW32 -> LMUL4 (3'b010)
+            inst_config_state[i+1].ta = 1'b1;
+            inst_config_state[i+1].ma = 1'b1;
+            unique case (inst_config_state[i+1].sew)
+              SEW8: begin
+                inst_config_state[i+1].lmul_orig = LMUL1;
+                inst_config_state[i+1].tk = (reg_read_data_i[2*i][7:5] > 3'd4)
+                                            ? 3'd4 : reg_read_data_i[2*i][7:5];
+              end
+              SEW16: begin
+                inst_config_state[i+1].lmul_orig = LMUL2;
+                inst_config_state[i+1].tk = (reg_read_data_i[2*i][7:5] > 3'd2)
+                                            ? 3'd2 : reg_read_data_i[2*i][7:5];
+              end
+              SEW32: begin
+                inst_config_state[i+1].lmul_orig = LMUL4;
+                inst_config_state[i+1].tk = (reg_read_data_i[2*i][7:5] > 3'd1)
+                                            ? 3'd1 : reg_read_data_i[2*i][7:5];
+              end
+              default: begin
+                inst_config_state[i+1].lmul_orig = LMULRESERVED;
+                inst_config_state[i+1].tk = 3'd0;
+              end
+            endcase
+            // tm = min(tm, LMUL*EVE, ETE) = min(tm, 16)
+            inst_config_state[i+1].tm = (reg_read_data_i[2*i][23:10] > 14'd16)
+                                        ? 14'd16 : reg_read_data_i[2*i][23:10];
+          end else begin
+            // Unconfigured (mtwiden == 0): mtype is 0, vtype takes rs2 as if by vsetvl.
+            inst_config_state[i+1].tk        = 3'b000;
+            inst_config_state[i+1].tm        = 14'd0;
+            inst_config_state[i+1].lmul_orig =
+                RVVLMUL'(reg_read_data_i[(2*i) + 1][2:0]);
+            inst_config_state[i+1].ta        = reg_read_data_i[(2*i) + 1][6];
+            inst_config_state[i+1].ma        = reg_read_data_i[(2*i) + 1][7];
+          end
           // avl stays 0 -> setvl post-processing will set vl=0 (when not vill).
           is_setvl[i] = 1;
         end else if (inst_q[i].bits[24:18] == 7'b1000010) begin
@@ -245,25 +282,46 @@ module RvvFrontEnd#(parameter N = 4,
               mset_writes_rd[i] = 1;
               mset_rd_data[i] = {18'd0, msettm_new_tm};
             end
-            3'b010: begin  // msettk rd, rs1 - mtype.tk <- min(rs1, KMAX). Field
-                            // is 2 bits per literal spec, so clamp to 0..3.
-              logic [1:0] msettk_new_tk;
-              msettk_new_tk = (reg_read_data_i[2*i] > 32'd3) ? 2'd3
-                                                                : reg_read_data_i[2*i][1:0];
+            3'b010: begin  // msettk rd, rs1 - mtype.tk <- min(rs1, KMAX).
+              logic [2:0] kmax;
+              logic [2:0] msettk_new_tk;
+              if (inst_config_state[i+1].mtwiden == 2'b00) begin
+                kmax = 3'd0;
+              end else begin
+                unique case (inst_config_state[i+1].sew)
+                  SEW8:    kmax = 3'd4;
+                  SEW16:   kmax = 3'd2;
+                  SEW32:   kmax = 3'd1;
+                  default: kmax = 3'd0;
+                endcase
+              end
+              msettk_new_tk = (reg_read_data_i[2*i] > {29'd0, kmax}) ? kmax
+                                                                     : reg_read_data_i[2*i][2:0];
               inst_config_state[i+1].tk = msettk_new_tk;
               mset_writes_rd[i] = 1;
-              mset_rd_data[i] = {30'd0, msettk_new_tk};
+              mset_rd_data[i] = {29'd0, msettk_new_tk};
             end
             3'b011: begin  // msetmtypei - imm[4:0] -> mtype low bits,
                             // imm[1:0] (bits[17:16]) -> vtype.sew, rest zeroed.
               inst_config_state[i+1].mtwiden = inst_q[i].bits[9:8];
-              inst_config_state[i+1].tk     = 2'b0;
+              inst_config_state[i+1].tk     = 3'b000;
               inst_config_state[i+1].tm     = 14'd0;
               inst_config_state[i+1].sew     =
                   RVVSEW'({1'b0, inst_q[i].bits[17:16]});
-              inst_config_state[i+1].lmul_orig = LMUL1;
-              inst_config_state[i+1].ta = 0;
-              inst_config_state[i+1].ma = 0;
+              if (inst_q[i].bits[9:8] != 2'b00) begin
+                inst_config_state[i+1].ta = 1'b1;
+                inst_config_state[i+1].ma = 1'b1;
+                unique case (inst_config_state[i+1].sew)
+                  SEW8:    inst_config_state[i+1].lmul_orig = LMUL1;
+                  SEW16:   inst_config_state[i+1].lmul_orig = LMUL2;
+                  SEW32:   inst_config_state[i+1].lmul_orig = LMUL4;
+                  default: inst_config_state[i+1].lmul_orig = LMULRESERVED;
+                endcase
+              end else begin
+                inst_config_state[i+1].lmul_orig = LMUL1;
+                inst_config_state[i+1].ta = 1'b0;
+                inst_config_state[i+1].ma = 1'b0;
+              end
               is_setvl[i] = 1;
             end
             default: ;
@@ -300,6 +358,19 @@ module RvvFrontEnd#(parameter N = 4,
           default: inst_config_state[i+1].vill = 1;
         endcase
 
+`ifdef ZVT_ON
+        // Zvt §15.1.1.4: vill |= (SEW * TWIDEN > ELEN). With ELEN=32:
+        // SEW16 with mtwiden=3 (TWIDEN=4) -> TEW=64 > 32
+        // SEW32 with mtwiden>=2 (TWIDEN>=2) -> TEW>=64 > 32
+        if (inst_config_state[i+1].mtwiden != 2'b00) begin
+          if ((inst_config_state[i+1].sew == SEW16 && inst_config_state[i+1].mtwiden == 2'd3) ||
+              (inst_config_state[i+1].sew == SEW32 && inst_config_state[i+1].mtwiden >= 2'd2) ||
+              (inst_config_state[i+1].sew > SEW32)) begin
+            inst_config_state[i+1].vill = 1'b1;
+          end
+        end
+`endif
+
         // Compute vl to set (saturating with necessary)
         unique case (inst_config_state[i+1].lmul_orig)
           LMUL1_8: vlmax[i] = ((`VLENB)/8) >> inst_config_state[i+1].sew;
@@ -320,6 +391,12 @@ module RvvFrontEnd#(parameter N = 4,
           inst_config_state[i+1].lmul_orig = LMUL1;
           inst_config_state[i+1].ta = 0;
           inst_config_state[i+1].ma = 0;
+`ifdef ZVT_ON
+          // Zvt §15.1.1.4: if vtype.vill || mtype.mtwiden == 0: mtype = 0
+          inst_config_state[i+1].mtwiden = 2'b00;
+          inst_config_state[i+1].tk     = 3'b000;
+          inst_config_state[i+1].tm     = 14'd0;
+`endif
         end else if (avl[i] > vlmax[i]) begin
           // One possible valid impl according to 6.3 of RVV spec.
           inst_config_state[i+1].vl = vlmax[i][`VL_WIDTH-1:0];
@@ -434,7 +511,7 @@ module RvvFrontEnd#(parameter N = 4,
       // ("matrix unit is not configured"). Reset to that state.
       config_state_q.altfmt  <= 1'b0;
       config_state_q.mtwiden <= 2'b00;
-      config_state_q.tk     <= 2'b00;
+      config_state_q.tk     <= 3'b000;
       config_state_q.tm     <= 14'd0;
 `endif
     end else begin
