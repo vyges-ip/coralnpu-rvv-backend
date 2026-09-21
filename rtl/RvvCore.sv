@@ -24,6 +24,7 @@ module RvvCore #(parameter N = 4,
   input rstn,
 
   input logic [`VSTART_WIDTH-1:0] vstart,
+  input logic vstart_valid,
   input logic [1:0] vxrm,
   input logic vxsat,
   input logic [2:0] frm,
@@ -91,14 +92,9 @@ module RvvCore #(parameter N = 4,
   output logic rvv_idle,
   output logic [$clog2(2*N + 1)-1:0] queue_capacity,
 
-  // Writeback from reorder buffer
-`ifdef TB_SUPPORT
+  // Writeback from reorder buffer and decode stage
   output ROB2RT_t [`NUM_RT_UOP+`NUM_DE_INST-1:0] rd_rob2rt_o,
   output logic    [`NUM_RT_UOP+`NUM_DE_INST-1:0] rd_valid_rob2rt_o,
-`else
-  output ROB2RT_t [`NUM_RT_UOP-1:0] rd_rob2rt_o,
-  output logic    [`NUM_RT_UOP-1:0] rd_valid_rob2rt_o,
-`endif
 
   // Trap output
   output logic trap_valid_o,
@@ -131,6 +127,7 @@ module RvvCore #(parameter N = 4,
       .clk(clk),
       .rstn(rstn),
       .vstart_i(vstart),
+      .vstart_valid_i(vstart_valid),
       .vxrm_i(vxrm),
       .vxsat_i(vxsat),
       .frm_i(frm),
