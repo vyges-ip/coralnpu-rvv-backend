@@ -87,6 +87,7 @@ module RvvCore #(parameter N = 4,
   // Config state
   output config_state_valid,
   output RVVConfigState config_state,
+  output logic [31:0] next_config_mtype_o,
 
   // Idle
   output logic rvv_idle,
@@ -117,7 +118,12 @@ module RvvCore #(parameter N = 4,
   // LSU to VME (load data)
   input logic uop_lsu2vme_valid,
   input VRegDataT uop_lsu2vme_data,
-  output logic uop_lsu2vme_ready
+  output logic uop_lsu2vme_ready,
+
+  // VME retirement
+  output logic vmeRtVld_o,
+  output VMERT_t vmeRt_o,
+  input  logic vmeRtRdy_i
 `endif
 );
   logic [N-1:0] frontend_cmd_valid;
@@ -148,7 +154,8 @@ module RvvCore #(parameter N = 4,
       .trap_valid_o(trap_valid_o),
       .trap_data_o(trap_data_o),
       .config_state_valid(config_state_valid),
-      .config_state(config_state)
+      .config_state(config_state),
+      .next_config_mtype_o(next_config_mtype_o)
   );
 
   // Backpressure from backend fifo
@@ -343,9 +350,9 @@ module RvvCore #(parameter N = 4,
       .uop_lsu2vme_rdy(uop_lsu2vme_rdy),
       .vme_lsuflush_vld(1'b0),
       .vme_lsuflush_rdy(),
-      .vmeRtVld(),
-      .vmeRt(),
-      .vmeRtRdy(1'b1)
+      .vmeRtVld(vmeRtVld_o),
+      .vmeRt(vmeRt_o),
+      .vmeRtRdy(vmeRtRdy_i)
 `endif
   );
 
