@@ -3051,23 +3051,24 @@ module rvv_backend_decode_unit_lsu
 
       `ifdef ZVT_ON
         TILELDST: begin
-          case(csr_lmul)
-            LMUL1: begin
-              if(inst_funct6[5:3]==TILESEW8) begin
-                emul_max = EMUL1;
-              end
+          case(inst_funct6[5:3])
+            TILESEW8: begin
+              emul_max = EMUL1;
             end
-            LMUL2: begin
-              if(inst_funct6[5:3]==TILESEW16) begin
-                emul_max      = EMUL2;
-                uop_index_max = (`UOP_INDEX_WIDTH)'('d1);
-              end
+            TILESEW16: begin
+              emul_max      = EMUL2;
+              uop_index_max = (csr_vl > 'd8) ? (`UOP_INDEX_WIDTH)'('d1) : (`UOP_INDEX_WIDTH)'('d0);
             end
-            LMUL4: begin
-              if(inst_funct6[5:3]==TILESEW32) begin
-                emul_max      = EMUL4;
+            TILESEW32: begin
+              emul_max      = EMUL4;
+              if (csr_vl > 'd12)
                 uop_index_max = (`UOP_INDEX_WIDTH)'('d3);
-              end
+              else if (csr_vl > 'd8)
+                uop_index_max = (`UOP_INDEX_WIDTH)'('d2);
+              else if (csr_vl > 'd4)
+                uop_index_max = (`UOP_INDEX_WIDTH)'('d1);
+              else
+                uop_index_max = (`UOP_INDEX_WIDTH)'('d0);
             end
           endcase
         end
@@ -3536,6 +3537,11 @@ module rvv_backend_decode_unit_lsu
           end
         endcase
       end
+    `ifdef ZVT_ON
+      TILE_LDST: begin
+        evl = (csr_vl > `TE) ? `TE : csr_vl;
+      end
+    `endif
     endcase
   end
   
