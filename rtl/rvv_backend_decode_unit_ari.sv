@@ -51,7 +51,6 @@ module rvv_backend_decode_unit_ari
   logic   [$clog2(`TE):0]         csr_tm;
   logic   [$clog2(`TE):0]         csr_tn;
   logic   [2:0]                   csr_tk;
-  TSS_t                           tss;
 `endif  
   EMUL_e                          emul_vd;          
   EMUL_e                          emul_vs2;          
@@ -132,9 +131,6 @@ module rvv_backend_decode_unit_ari
   assign csr_tm         = inst_valid ? inst.arch_state.tm : 'b0;
   assign csr_tn         = csr_vl[$clog2(`TE):0];
   assign csr_tk         = inst_valid ? inst.arch_state.tk : 'b0;
-  assign tss.tile       = rs1[30:27];
-  assign tss.pattern    = rs1[24];
-  assign tss.index      = rs1[$clog2(`TE)-1:0];
 `endif
 
   always_comb begin
@@ -3618,7 +3614,11 @@ module rvv_backend_decode_unit_ari
 
         `ifdef ZVT_ON
           VCOMPRESS_VTMVTV: begin
-            check_special = inst_vm&(inst_vd==5'b00000)&check_tn&(csr_vstart<=(`VSTART_WIDTH)'(tss.index));
+            check_special = inst_vm&(inst_vd==5'b00000)&check_tn
+                          `ifndef RVVCHECK_VSTART_VL
+                            &check_vstart_sle_vl
+                          `endif 
+                            ;
           end
         `endif
         endcase
@@ -3788,7 +3788,7 @@ module rvv_backend_decode_unit_ari
   // check common requirements for all instructions
   assign check_common = (!csr_vill || is_vmv_nr)&check_vd_align&check_sew&check_lmul&(check_vs2_align&check_vs1_align
                       `ifdef ZVT_ON
-                        || isVmeAlu&check_vme_vs1_align&check_vme_vs2_align
+                        &(!isVmeAlu) || isVmeAlu&check_vme_vs1_align&check_vme_vs2_align
                       `endif
                         )
                       `ifdef ZVE32F_ON
@@ -4035,7 +4035,7 @@ module rvv_backend_decode_unit_ari
   // check vl is not 0
   // check vstart < vl
   always_comb begin
-    check_vl_not_0      = csr_vl!='b0;
+    check_vl_not_0      = |csr_vl;
     check_vstart_sle_vl = evstart < csr_vl;
     
     // Instructions that write an x register or f register do so even when vstart >= vl, including when vl=0.
@@ -4043,7 +4043,7 @@ module rvv_backend_decode_unit_ari
       OPIVI: begin
         case(inst_funct6)
           VSMUL_VMVNRR: begin
-            check_vl_not_0      = evl!='b0;
+            check_vl_not_0      = |evl;
             check_vstart_sle_vl = {1'b0,csr_vstart} < evl;
           end
         endcase
@@ -4090,7 +4090,7 @@ module rvv_backend_decode_unit_ari
         case(inst_funct6)
           VWRFUNARY0: begin
             case(vs2_opcode)
-              VFMV_S_F: check_vstart_sle_vl = {1'b0,csr_vstart} < evl;
+              VFMV_S_F: check_vstart_sle_vl = {1'b0,csr_vstart} < csr_vl;
             endcase
           end
         endcase
